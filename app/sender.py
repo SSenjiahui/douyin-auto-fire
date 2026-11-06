@@ -90,6 +90,15 @@ SEND_PENDING_MARKERS = (
     '[class*="im-saas-message-spin"]',
     '[data-icon="spin"]',
 )
+# Retry control on a failed outgoing bubble: the red `!` marker Douyin mounts
+# when a send fails with "可以重试" (risk-control / transient failure). Clicking
+# it re-sends the same bubble in place.
+SEND_RETRY_MARKERS = (
+    '[aria-label*="重试"]',
+    '[title*="重试"]',
+    '[class*="ContentSideSendStatusretry"]',
+    '[class*="SendStatusretry"]',
+)
 
 # Overall budget for confirming a single message reaches a terminal state. A
 # stuck spinner past this is treated as failure/uncertain, never success.
@@ -150,7 +159,18 @@ async def send_text(chat: DouyinChat, content: str) -> None:
     before = await _mark_latest_outgoing_message(page)
     await page.wait_for_timeout(300)
     await _trigger_send(page)
-    await _confirm_outgoing_message(page, before, label="文字", expected_text=content)
+    try:
+        await _confirm_outgoing_message(page, before, label="文字", expected_text=content)
+    except PageOperationError as exc:
+        # Transient risk-control failure ("可以重试"): click the in-bubble
+        # retry control and re-confirm, mirroring the sticker retry path. The
+        # bubble already exists (same anchor/content), so confirm its terminal
+        # state directly instead of waiting for a "new" bubble that never comes.
+        if "页面提示可以重试" in str(exc) and await _click_retry_on_latest_failed_message(page):
+            latest = page.locator(LATEST_OUTGOING_MESSAGE).first
+            await _await_send_terminal_state(page, latest, "文字")
+            return
+        raise
 
 
 async def send_image(page: Page, image_path: str) -> None:
@@ -298,6 +318,20 @@ async def _confirm_sticker_sent(
     resource_key: str = "",
 ) -> None:
     await _confirm_outgoing_message(page, before, f"原生表情“{name}”", resource_key=resource_key)
+
+
+async def _click_retry_on_latest_failed_message(page: Page) -> bool:
+    """Click the red retry control on the latest outgoing bubble, if visible."""
+    latest = page.locator(LATEST_OUTGOING_MESSAGE).first
+    for selector in SEND_RETRY_MARKERS:
+        marker = latest.locator(selector).first
+        try:
+            if await marker.count() and await marker.is_visible():
+                await marker.click(force=True)
+                return True
+        except Exception:
+            continue
+    return False
 
 
 async def _marker_visible(scope: Locator, selectors: tuple[str, ...]) -> bool:
