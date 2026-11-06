@@ -33,20 +33,20 @@ jobs:
       WEBHOOK_HEADERS: ${{ secrets.WEBHOOK_HEADERS }}
       WEBHOOK_TEMPLATE: ${{ secrets.WEBHOOK_TEMPLATE }}
       HEADLESS: "true"
+      EVENT_NAME: ${{ github.event_name }}
+      DRY_RUN: ${{ inputs.dry_run }}
     steps:
       - uses: actions/checkout@v4
-      - name: Write protected configuration
-        shell: pwsh
+      - name: Write config and Run
+        shell: bash
         run: |
-          [System.IO.File]::WriteAllText("$PWD\config.json", $env:DOUYIN_CONFIG)
-      - name: Run
-        shell: pwsh
-        run: |
-          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.dry_run }}" -eq "true") {
-            & O:\douyin-venv\Scripts\python.exe run.py --dry-run
-          } else {
-            & O:\douyin-venv\Scripts\python.exe run.py
-          }
+          # 用 Python 写 config.json（正确处理 UTF-8 / 多行 JSON）
+          /o/douyin-venv/Scripts/python.exe -c "import os; open('config.json','w',encoding='utf-8').write(os.environ['DOUYIN_CONFIG'])"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DRY_RUN" = "true" ]; then
+            /o/douyin-venv/Scripts/python.exe run.py --dry-run
+          else
+            /o/douyin-venv/Scripts/python.exe run.py
+          fi
       - name: Upload diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
