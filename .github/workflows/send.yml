@@ -38,15 +38,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Write config and Run
-        shell: bash
+        # NOTE: on Windows runners `shell: bash` resolves to C:\WINDOWS\system32\bash.EXE
+        # (WSL bash). Without WSL2 installed that aborts with HCS_E_HYPERV_NOT_INSTALLED.
+        # Use the built-in Windows PowerShell 5.1 instead. Keep this script ASCII-only:
+        # PS 5.1 decodes BOM-less scripts as ANSI, so non-ASCII would be mangled.
+        shell: powershell
         run: |
-          # 用 Python 写 config.json（正确处理 UTF-8 / 多行 JSON）
-          /o/douyin-venv/Scripts/python.exe -c "import os; open('config.json','w',encoding='utf-8').write(os.environ['DOUYIN_CONFIG'])"
-          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DRY_RUN" = "true" ]; then
-            /o/douyin-venv/Scripts/python.exe run.py --dry-run
-          else
-            /o/douyin-venv/Scripts/python.exe run.py
-          fi
+          $ErrorActionPreference = 'Stop'
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllText((Join-Path $PWD 'config.json'), $env:DOUYIN_CONFIG, $utf8)
+          Write-Host "config.json written, bytes=$((Get-Item 'config.json').Length)"
+
+          $py = 'O:\douyin-venv\Scripts\python.exe'
+          if ($env:EVENT_NAME -eq 'workflow_dispatch' -and $env:DRY_RUN -eq 'true') {
+            Write-Host '=== mode: dry-run ==='
+            & $py run.py --dry-run
+          } else {
+            Write-Host '=== mode: real send ==='
+            & $py run.py
+          }
+          $code = $LASTEXITCODE
+          Write-Host "python exit code = $code"
+          exit $code
       - name: Upload diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
